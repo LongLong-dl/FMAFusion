@@ -242,6 +242,7 @@ def main(exp_tag="FMAFusion",
 
 
 if __name__ == '__main__':
+    set_seed(42)
     p = argparse.ArgumentParser(description='FMAFusion Training')
     p.add_argument('--image_size', type=int, default=224, choices=[224, 384])
     p.add_argument('--swin_weights_rgb', type=str, default=None)
