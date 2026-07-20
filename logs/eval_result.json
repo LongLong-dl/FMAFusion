@@ -1,0 +1,27 @@
+{
+  "weights": "./logs/best_model.pth",
+  "per_target": {
+    "calories": {
+      "MAE": 37.96,
+      "PMAE": 14.42
+    },
+    "mass": {
+      "MAE": 22.35,
+      "PMAE": 10.42
+    },
+    "fat": {
+      "MAE": 2.57,
+      "PMAE": 19.41
+    },
+    "carb": {
+      "MAE": 3.27,
+      "PMAE": 16.82
+    },
+    "protein": {
+      "MAE": 3.11,
+      "PMAE": 16.4
+    }
+  },
+  "avg_mae": 13.85,
+  "avg_pmae": 15.49
+}

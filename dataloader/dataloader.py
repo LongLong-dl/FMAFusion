@@ -13,14 +13,17 @@ except ImportError:
 
 
 def seed_worker(worker_id):
+    """Deterministic DataLoader worker init for reproducibility (Dataset and Setup)."""
     worker_seed = torch.initial_seed() % 2 ** 32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
 
 def get_DataLoader(args):
+    """Build train/test DataLoaders with ImageNet normalization (Dataset and Setup)."""
     norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
+    # Data augmentation: Resize(274×324) → CenterCrop(224×224)
     transform = transforms.Compose([
         transforms.Resize((args.size + 50, args.size + 100)),
         transforms.CenterCrop((args.size, args.size)),

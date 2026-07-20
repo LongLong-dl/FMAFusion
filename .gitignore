@@ -2,33 +2,12 @@
 .idea
 dataset
 
-logs/
 **/__pycache__/
 *.pyc
 
-docs/figures
-
-weights/swin_base_patch4_window7_224_22k.pth
-weights/swin_base_patch4_window12_384_22k.pth
 weights/swin_base_patch4_window7_224_1k.pth
-weights/swin_base_patch4_window12_384_1k.pth
 
 paper/llncsdoc.pdf
 paper/AnonymousSubmission2027.pdf
 paper/CameraReady2027.pdf
 paper/ReproducibilityChecklist.pdf
-
-scripts/qualitative/*
-
-scripts/spectrum/*
-
-baseline/OmniFood8K-food
-
-.claude
-
-paper/Figures/.$架构图.drawio.bkp
-
-model/fma_fusion_e4.py
-model/dual_swin_e4.py
-
-literature

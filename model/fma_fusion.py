@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 
 def _create_low_mask(size: int, low_radius: int, device: torch.device):
+    """Create a rectangular low-frequency mask L (FMAFusion Module Stage B, Eq.2 context)."""
     mask = torch.zeros(size, size, device=device)
     center = size // 2
     r = min(low_radius, center)
@@ -12,6 +13,9 @@ def _create_low_mask(size: int, low_radius: int, device: torch.device):
 
 
 class LowFreqWeightGenerator(nn.Module):
+    """Sample-adaptive weight generator (FMAFusion Module Stage B, Eq.2).
+    GAP + MLP → 8 scalar weights per sample.
+    """
     def __init__(self, common_dim: int = 256, hidden_dim: int = 128, dropout: float = 0.1):
         super().__init__()
         self.pool = nn.AdaptiveAvgPool2d(1)
@@ -24,7 +28,7 @@ class LowFreqWeightGenerator(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, 8),
         )
-        self.temp = nn.Parameter(torch.tensor(1.0))
+        self.temp = nn.Parameter(torch.tensor(1.0))  # learnable temperature τ
 
     def forward(self, F_list: list):
         B = F_list[0].shape[0]
@@ -36,9 +40,12 @@ class LowFreqWeightGenerator(nn.Module):
 
 
 class ModalFusion(nn.Module):
+    """Per-level RGB–Depth high-frequency fusion (FMAFusion Module Stage C, Eq.4).
+    Sigmoid-gated weighted sum with learnable α_i per level.
+    """
     def __init__(self, dim: int = 256):
         super().__init__()
-        self.rgb_weight = nn.Parameter(torch.tensor(0.5))
+        self.rgb_weight = nn.Parameter(torch.tensor(0.5))  # σ(α_i)
 
     def forward(self, mag_rgb: torch.Tensor, mag_depth: torch.Tensor):
         w = torch.sigmoid(self.rgb_weight)
@@ -46,6 +53,9 @@ class ModalFusion(nn.Module):
 
 
 class CrossLevelHighFreqGate(nn.Module):
+    """Cross-level high-frequency channel gating (Cross-Level High-Frequency Gate, Eq.5–7).
+    Aggregates S1–S3 GAP descriptors → MLP → channel gate g → S4 enhancement.
+    """
     def __init__(self, dim: int = 256, hidden_dim: int = 128):
         super().__init__()
         self.pool = nn.AdaptiveAvgPool2d(1)
@@ -65,15 +75,18 @@ class CrossLevelHighFreqGate(nn.Module):
         pooled = []
         for hm in high_mags_1to3:
             pooled.append(self.pool(hm).flatten(1))
-        cat = torch.cat(pooled, dim=1)
-        gate = self.mlp(cat)
+        cat = torch.cat(pooled, dim=1)           # Eq.6: z = [GAP(M¹); GAP(M²); GAP(M³)]
+        gate = self.mlp(cat)                      # Eq.7: g = Sigmoid(MLP(z))
         gate = gate.view(gate.shape[0], gate.shape[1], 1, 1)
-        enhanced = mag_high_s4 * gate
-        enhanced = enhanced + self.refine(enhanced)
+        enhanced = mag_high_s4 * gate              # M⁴_rgb ⊙ H ⊙ g
+        enhanced = enhanced + self.refine(enhanced) # + Conv3×3 residual (Eq.7)
         return enhanced
 
 
 class FMAFusion(nn.Module):
+    """FMAFusion module (FMAFusion Module): frequency-domain multi-scale fusion.
+    All cross-modal, cross-scale aggregation performed within magnitude spectrum.
+    """
     def __init__(self,
                  in_dims: tuple = (128, 256, 512, 1024),
                  common_dim: int = 256,
@@ -89,6 +102,7 @@ class FMAFusion(nn.Module):
         self.verbose = verbose
         self._first_forward = True
 
+        # Stage A: 1×1 projection to unified dimension d=256 (FMAFusion Module Stage A)
         self.stage_proj_rgb = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(in_dims[i], common_dim, 1, bias=False),
@@ -104,27 +118,33 @@ class FMAFusion(nn.Module):
             ) for i in range(4)
         ])
 
+        # Stage B: learnable low-frequency weight generator (FMAFusion Module Stage B)
         self.low_weight_gen = LowFreqWeightGenerator(common_dim, dropout=dropout)
 
+        # Stage C: per-level ModalFusion (FMAFusion Module Stage C, Eq.4)
         self.modal_fusions = nn.ModuleList([
             ModalFusion(common_dim) for _ in range(4)
         ])
 
+        # Cross-level high-frequency gate (Cross-Level High-Frequency Gate, Eq.5–7)
         self.cross_level_gate = CrossLevelHighFreqGate(dim=common_dim, hidden_dim=128)
 
+        # High-frequency refinement conv (FMAFusion Module Stage C)
         self.high_refine = nn.Sequential(
             nn.Conv2d(common_dim, common_dim, 3, padding=1, bias=False),
             nn.BatchNorm2d(common_dim),
             nn.GELU(),
         )
 
+        # Stage D: output projection (FMAFusion Module Stage D)
         self.output_proj = nn.Sequential(
             nn.Conv2d(common_dim, output_dim, 1, bias=False),
             nn.BatchNorm2d(output_dim),
             nn.GELU(),
         )
 
-        s4_in_dim = in_dims[3] * 2
+        # Stage D: spatial residual bypass (FMAFusion Module Stage D)
+        s4_in_dim = in_dims[3] * 2  # cat(RGB⁴, Depth⁴)
         self.residual_proj = nn.Sequential(
             nn.Conv2d(s4_in_dim, output_dim, 1, bias=False),
             nn.BatchNorm2d(output_dim),
@@ -137,6 +157,7 @@ class FMAFusion(nn.Module):
 
         target_h, target_w = rgb_feats[3].shape[2], rgb_feats[3].shape[3]
 
+        # Stage A: upsample S1–S3 to S4 resolution (7×7) (FMAFusion Module Stage A)
         rgb_aligned = []
         depth_aligned = []
         for i in range(4):
@@ -151,12 +172,14 @@ class FMAFusion(nn.Module):
                 rgb_aligned.append(rgb_feats[i])
                 depth_aligned.append(depth_feats[i])
 
+        # Stage A: 1×1 projection to common dim d=256 (FMAFusion Module Stage A)
         F_rgb = []
         F_depth = []
         for i in range(4):
             F_rgb.append(self.stage_proj_rgb[i](rgb_aligned[i]))
             F_depth.append(self.stage_proj_depth[i](depth_aligned[i]))
 
+        # Stage A: FFT → magnitude + phase (FMAFusion Module Stage A)
         X_rgb = []
         X_depth = []
         for i in range(4):
@@ -167,31 +190,37 @@ class FMAFusion(nn.Module):
 
         mag_rgb = [torch.abs(X) for X in X_rgb]
         mag_depth = [torch.abs(X) for X in X_depth]
-        phase4 = torch.angle(X_rgb[3])
+        phase4 = torch.angle(X_rgb[3])  # keep only S4 RGB phase; discard the rest (FMAFusion Module Stage A)
 
+        # Stage B: low-frequency mask L (radius r=2) (FMAFusion Module Stage B)
         spatial_size = target_h
         mask_low = _create_low_mask(spatial_size, self.low_radius, device)
         mask_low = mask_low.view(1, 1, spatial_size, spatial_size)
         mask_high = 1.0 - mask_low
 
+        # Stage B: sample-adaptive weights via GAP + MLP (FMAFusion Module Stage B)
         F_all = F_rgb + F_depth
         mag_all = mag_rgb + mag_depth
         low_weights = self.low_weight_gen(F_all)
 
+        # Stage B: weighted low-frequency aggregation (Eq.3)
         mag_low = torch.zeros_like(mag_all[0])
         for i in range(8):
             mag_low = mag_low + low_weights[:, i] * mag_all[i] * mask_low
 
+        # Stage C: per-level ModalFusion on high frequencies (FMAFusion Module Stage C, Eq.4)
         fused_high = []
         for i in range(4):
             fh = self.modal_fusions[i](
                 mag_rgb[i] * mask_high, mag_depth[i] * mask_high)
             fused_high.append(fh)
 
+        # Stage C: cross-level high-frequency gating (Cross-Level High-Frequency Gate, Eq.5–7)
         mag_high = self.cross_level_gate(
             [fused_high[0], fused_high[1], fused_high[2]], mag_rgb[3] * mask_high)
         mag_high = self.high_refine(mag_high)
 
+        # Stage D: combine low + high → reconstruct with S4 RGB phase (FMAFusion Module Stage D)
         mag_fused = mag_low + mag_high
         X_fused = mag_fused * torch.exp(1j * phase4)
 
@@ -200,10 +229,12 @@ class FMAFusion(nn.Module):
 
         F_out = self.output_proj(F_fused)
 
+        # Stage D: spatial residual bypass (S4 RGB + S4 Depth → 1×1) (FMAFusion Module Stage D)
         s4_cat = torch.cat([rgb_aligned[3], depth_aligned[3]], dim=1)
         residual = self.residual_proj(s4_cat)
         F_out = F_out + residual
 
+        # Stage D: LayerNorm (FMAFusion Module Stage D)
         F_out = F_out.permute(0, 2, 3, 1)
         F_out = self.out_norm(F_out)
         F_out = F_out.permute(0, 3, 1, 2)
@@ -243,9 +274,13 @@ class FMAFusion(nn.Module):
 
 
 class FMAFusionHead(nn.Module):
+    """Late-Pool Fusion Head (Late-Pool Fusion Head): spatial attention before GAP.
+    Applies attention map A → reweight → GAP → shared MLP → 5 experts.
+    """
     def __init__(self, in_dim: int = 1024, hidden_dim: int = 512,
                  num_targets: int = 5, dropout: float = 0.1):
         super().__init__()
+        # Spatial attention: Conv1×1 → BN → GELU → Conv1×1 → Sigmoid
         self.spatial_attn = nn.Sequential(
             nn.Conv2d(in_dim, in_dim // 4, 1, bias=False),
             nn.BatchNorm2d(in_dim // 4),
@@ -255,6 +290,7 @@ class FMAFusionHead(nn.Module):
         )
         self.gap = nn.AdaptiveAvgPool2d(1)
 
+        # Shared encoder (universal nutrition representation)
         self.shared = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.GELU(),
@@ -264,6 +300,7 @@ class FMAFusionHead(nn.Module):
             nn.Dropout(dropout),
         )
 
+        # 5 per-target experts: calories, mass, fat, carb, protein
         self.experts = nn.ModuleList([
             nn.Linear(hidden_dim // 2, 1) for _ in range(num_targets)
         ])

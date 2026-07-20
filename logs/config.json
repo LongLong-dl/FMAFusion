@@ -1,0 +1,36 @@
+{
+  "experiment": "E4_FMAFusion_late",
+  "version": "v11",
+  "model": {
+    "name": "DualSwin_FMAFusion",
+    "image_size": 224,
+    "use_fma": true,
+    "single_modal": false,
+    "fma_head_type": "late_pool",
+    "total_params": 179625859
+  },
+  "training": {
+    "epochs": 150,
+    "batch_size": 32,
+    "num_workers": 8,
+    "device": "cuda"
+  },
+  "optimizer": {
+    "type": "AdamW",
+    "lr": 4e-05,
+    "weight_decay": 0.01
+  },
+  "scheduler": {
+    "type": "cosine"
+  },
+  "loss": "NormalizedMAELoss",
+  "regularization": {
+    "dropout": 0.1,
+    "early_stop_patience": 30
+  },
+  "swin_weights": {
+    "rgb": "./weights/swin_base_patch4_window7_224.pth",
+    "depth": null
+  },
+  "start_time": "20260702_200733"
+}
