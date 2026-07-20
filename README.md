@@ -19,6 +19,7 @@ FMAFusion/
 ├── evaluate.py             Evaluation script (MAE / PMAE)
 ├── logs/                   Training logs & checkpoints
 ├── weights/                Pretrained Swin weights
+├── process_data/           Data preprocessing
 ├── dataset/
 │   └── nutrition5k_dataset/
 │       ├── dish_nutrition_values.csv       # ground truth labels
@@ -47,7 +48,7 @@ python process_data/split_dataset.py
 
 # pretrained weights
 mkdir weights
-# download swin_base_patch4_window7_224_22k.pth to weights/
+# download swin_base_patch4_window7_224_1k.pth to weights/
 ```
 ## Usage
 
@@ -62,4 +63,4 @@ python evaluate.py --weights logs/<exp>/best_model.pth --image_size 224
 ```
 ## Requirements
 
-torch≥2.0, torchvision, timm, opencv-python, tqdm, numpy, pillow
+requirements.txt
